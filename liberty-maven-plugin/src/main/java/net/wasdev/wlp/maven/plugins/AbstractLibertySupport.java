@@ -23,28 +23,25 @@ import org.apache.maven.artifact.Artifact;
 import org.apache.maven.artifact.DefaultArtifact;
 import org.apache.maven.artifact.handler.DefaultArtifactHandler;
 import org.apache.maven.artifact.repository.ArtifactRepository;
+import org.apache.maven.artifact.resolver.ArtifactResolutionRequest;
+import org.apache.maven.artifact.resolver.ArtifactResolutionResult;
 import org.apache.maven.artifact.resolver.filter.ArtifactFilter;
+import org.apache.maven.artifact.versioning.VersionRange;
+import org.apache.maven.artifact.versioning.InvalidVersionSpecificationException;
+import org.apache.maven.artifact.versioning.Restriction;
 import org.apache.maven.execution.MavenSession;
 import org.apache.maven.model.Dependency;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugin.MojoFailureException;
 import org.apache.maven.project.MavenProject;
 import org.apache.maven.project.ProjectBuilder;
+import org.apache.maven.repository.RepositorySystem;
 import org.apache.maven.settings.Settings;
 import org.apache.maven.plugins.annotations.Component;
 import org.apache.maven.plugins.annotations.Parameter;
 import org.codehaus.mojo.pluginsupport.MojoSupport;
 import org.codehaus.mojo.pluginsupport.ant.AntHelper;
 import org.codehaus.mojo.pluginsupport.util.ArtifactItem;
-import org.eclipse.aether.RepositorySystem;
-import org.eclipse.aether.RepositorySystemSession;
-import org.eclipse.aether.repository.RemoteRepository;
-import org.eclipse.aether.resolution.ArtifactRequest;
-import org.eclipse.aether.resolution.ArtifactResolutionException;
-import org.eclipse.aether.resolution.ArtifactResult;
-import org.eclipse.aether.resolution.VersionRangeRequest;
-import org.eclipse.aether.resolution.VersionRangeResolutionException;
-import org.eclipse.aether.resolution.VersionRangeResult;
 
 /**
  * Liberty Abstract Mojo Support
@@ -71,12 +68,6 @@ public abstract class AbstractLibertySupport extends MojoSupport {
     
     @Component
     protected RepositorySystem repositorySystem;
-
-    @Parameter( defaultValue = "${repositorySystemSession}", readonly = true, required = true )
-    protected RepositorySystemSession repoSession;
-
-    @Parameter( defaultValue = "${project.remoteProjectRepositories}", readonly = true, required = true )
-    protected List<RemoteRepository> repositories;
     
     @Component
     protected ProjectBuilder mavenProjectBuilder;
@@ -148,39 +139,39 @@ public abstract class AbstractLibertySupport extends MojoSupport {
      *
      * @throws MojoExecutionException   Failed to create artifact
      */
-    @Override
-    protected Artifact getArtifact(final ArtifactItem item) throws MojoExecutionException {
-        assert item != null;
-        Artifact artifact = null;
-        
-        if (item.getVersion() != null) {
-            // if version is set in ArtifactItem, it will always override the one in project dependency
-            artifact = createArtifact(item);
-        } else {
-            // Return the artifact from the project dependency if it is available and the mojo
-            // should have requiresDependencyResolution=ResolutionScope.COMPILE_PLUS_RUNTIME set
-            artifact = resolveFromProjectDependencies(item);
-            
-            if (artifact != null) {
-                // in case it is not resolved yet
-                if (!artifact.isResolved()) {
-                    item.setVersion(artifact.getVersion());
-                    artifact = createArtifact(item);
-                }
-            } else if (resolveFromProjectDepMgmt(item) != null) {
-                // if item has no version set, try to get it from the project dependencyManagement section
-                // get version from dependencyManagement
-                item.setVersion(resolveFromProjectDepMgmt(item).getVersion());
-                artifact = createArtifact(item);
-            } else {
-                    throw new MojoExecutionException(
-                            "Unable to find artifact version of " + item.getGroupId() + ":" + item.getArtifactId()
-                                    + " in either project dependencies or in project dependencyManagement.");
-            }
-        }
-        
-        return artifact;
-    }
+//    @Override
+//    protected Artifact getArtifact(final ArtifactItem item) throws MojoExecutionException {
+//        assert item != null;
+//        Artifact artifact = null;
+//        
+//        if (item.getVersion() != null) {
+//            // if version is set in ArtifactItem, it will always override the one in project dependency
+//            artifact = createArtifact(item);
+//        } else {
+//            // Return the artifact from the project dependency if it is available and the mojo
+//            // should have requiresDependencyResolution=ResolutionScope.COMPILE_PLUS_RUNTIME set
+//            artifact = resolveFromProjectDependencies(item);
+//            
+//            if (artifact != null) {
+//                // in case it is not resolved yet
+//                if (!artifact.isResolved()) {
+//                    item.setVersion(artifact.getVersion());
+//                    artifact = createArtifact(item);
+//                }
+//            } else if (resolveFromProjectDepMgmt(item) != null) {
+//                // if item has no version set, try to get it from the project dependencyManagement section
+//                // get version from dependencyManagement
+//                item.setVersion(resolveFromProjectDepMgmt(item).getVersion());
+//                artifact = createArtifact(item);
+//            } else {
+//                    throw new MojoExecutionException(
+//                            "Unable to find artifact version of " + item.getGroupId() + ":" + item.getArtifactId()
+//                                    + " in either project dependencies or in project dependencyManagement.");
+//            }
+//        }
+//        
+//        return artifact;
+//    }
     
     /**
      * Equivalent to {@link #getArtifact(ArtifactItem)} with an ArtifactItem
@@ -206,7 +197,7 @@ public abstract class AbstractLibertySupport extends MojoSupport {
         item.setType(type);
         item.setVersion(version);
 
-        return getArtifact(item);
+        return super.getArtifact(item);
     }
 
     /**
@@ -217,26 +208,22 @@ public abstract class AbstractLibertySupport extends MojoSupport {
      *
      * @throws MojoExecutionException   Failed to create artifact
      */
-    @Override
-    protected Artifact createArtifact(final ArtifactItem item) throws MojoExecutionException {
-        assert item != null;
-        
-        if (item.getVersion() == null) {
-            throw new MojoExecutionException("Unable to find artifact without version specified: " + item.getGroupId()
-                + ":" + item.getArtifactId() + ":" + item.getVersion() + " in either project dependencies or in project dependencyManagement.");
-        }
-        
-        // if version is a range get the highest available version
-        if (item.getVersion().trim().startsWith("[") || item.getVersion().trim().startsWith("(") ) {
-            try {
-                item.setVersion(resolveVersionRange(item.getGroupId(), item.getArtifactId(), item.getType(), item.getVersion()));
-            } catch (VersionRangeResolutionException e) {
-                throw new MojoExecutionException("Could not get the highest version from the range: " + item.getVersion(), e);
-            }
-        }
-        
-        return resolveArtifactItem(item);
-    }
+//    @Override
+//    protected Artifact createArtifact(final ArtifactItem item) throws MojoExecutionException {
+//        assert item != null;
+//        
+//        if (item.getVersion() == null) {
+//            throw new MojoExecutionException("Unable to find artifact without version specified: " + item.getGroupId()
+//                + ":" + item.getArtifactId() + ":" + item.getVersion() + " in either project dependencies or in project dependencyManagement.");
+//        }
+//        
+////        // if version is a range get the highest available version
+////        if (item.getVersion().trim().startsWith("[") || item.getVersion().trim().startsWith("(") ) {
+////            item.setVersion(resolveVersionRange(item.getGroupId(), item.getArtifactId(), item.getType(), item.getVersion()));
+////        }
+//        
+//        return super.createArtifact(item);
+//    }
     
     private Artifact resolveFromProjectDependencies(ArtifactItem item) {
         Set<Artifact> actifacts = getProject().getArtifacts();
@@ -278,64 +265,53 @@ public abstract class AbstractLibertySupport extends MojoSupport {
         return null;
     }
     
-    private Artifact resolveArtifactItem(final ArtifactItem item) throws MojoExecutionException {
-        org.eclipse.aether.artifact.Artifact aetherArtifact = new org.eclipse.aether.artifact.DefaultArtifact(
-                item.getGroupId(), item.getArtifactId(), item.getType(), item.getVersion());
-        
-        File artifactFile = resolveArtifactFile(aetherArtifact);
-        
-        Artifact artifact = new DefaultArtifact(item.getGroupId(), item.getArtifactId(), item.getVersion(),
-                Artifact.SCOPE_PROVIDED, item.getType(), null, new DefaultArtifactHandler("jar"));
-        
-        if (artifactFile != null && artifactFile.exists()) {
-            artifact.setFile(artifactFile);
-            artifact.setResolved(true);
-            log.debug(item.getGroupId() + ":" + item.getArtifactId() + ":" + item.getVersion()
-                    + " is resolved from project repositories.");
-        } else {
-            getLog().warn("Artifact " + item.getGroupId() + ":" + item.getArtifactId() + ":" + item.getVersion()
-                    + " has no attached file.");
-            artifact.setResolved(false);
-        }
-        return artifact;
-    }
+//    private Artifact resolveArtifactItem(final ArtifactItem item) throws MojoExecutionException {
+//        Artifact artifact = new DefaultArtifact(item.getGroupId(), item.getArtifactId(), item.getVersion(),
+//                Artifact.SCOPE_PROVIDED, item.getType(), null, new DefaultArtifactHandler("jar"));
+//        
+//        File artifactFile = resolveArtifactFile(artifact);
+//        
+//        if (artifactFile != null && artifactFile.exists()) {
+//            artifact.setFile(artifactFile);
+//            artifact.setResolved(true);
+//            log.debug(item.getGroupId() + ":" + item.getArtifactId() + ":" + item.getVersion()
+//                    + " is resolved from project repositories.");
+//        } else {
+//            getLog().warn("Artifact " + item.getGroupId() + ":" + item.getArtifactId() + ":" + item.getVersion()
+//                    + " has no attached file.");
+//            artifact.setResolved(false);
+//        }
+//        return artifact;
+//    }
     
-    private File resolveArtifactFile(org.eclipse.aether.artifact.Artifact aetherArtifact) throws MojoExecutionException {
-        ArtifactRequest req = new ArtifactRequest().setRepositories(this.repositories).setArtifact(aetherArtifact);
-        ArtifactResult resolutionResult = null;
-        
-        try {
-            resolutionResult = this.repositorySystem.resolveArtifact(this.repoSession, req);
-            if (!resolutionResult.isResolved()) {
-                throw new MojoExecutionException("Unable to resolve artifact: " + aetherArtifact.getGroupId() + ":"
-                        + aetherArtifact.getArtifactId() + ":" + aetherArtifact.getVersion());
-            }
-        } catch (ArtifactResolutionException e) {
-            throw new MojoExecutionException("Unable to resolve artifact: " + aetherArtifact.getGroupId() + ":"
-                    + aetherArtifact.getArtifactId() + ":" + aetherArtifact.getVersion(), e);
-        }
-        
-        File artifactFile = resolutionResult.getArtifact().getFile();
-        
-        return artifactFile;
-    }
-    
-    private String resolveVersionRange(String groupId, String artifactId, String extension, String version)
-            throws VersionRangeResolutionException {
-        org.eclipse.aether.artifact.Artifact aetherArtifact = new org.eclipse.aether.artifact.DefaultArtifact(groupId,
-                artifactId, extension, version);
-        
-        VersionRangeRequest rangeRequest = new VersionRangeRequest();
-        rangeRequest.setArtifact(aetherArtifact);
-        rangeRequest.setRepositories(repositories);
-        
-        VersionRangeResult rangeResult = this.repositorySystem.resolveVersionRange(this.repoSession, rangeRequest);
-        
-        if (rangeResult == null || rangeResult.getHighestVersion() == null) {
-            throw new VersionRangeResolutionException(rangeResult, "Unable to resolve version range fram " + groupId
-                    + ":" + artifactId + ":" + extension + ":" + version);
-        }
-        getLog().debug("Available versions: " + rangeResult.getVersions());
-        return rangeResult.getHighestVersion().toString();
-    }
+//    private File resolveArtifactFile(Artifact artifact) throws MojoExecutionException {
+//        ArtifactResolutionRequest req = new ArtifactResolutionRequest().setRemoteRepositories(project.getRemoteArtifactRepositories()).setArtifact(artifact);
+//        log.info("repo system is set: " + (this.repositorySystem == null));
+//        ArtifactResolutionResult resolutionResult = this.repositorySystem.resolve(req);
+//        if (!resolutionResult.isSuccess()) {
+//            throw new MojoExecutionException("Unable to resolve artifact: " + artifact.getGroupId() + ":"
+//                    + artifact.getArtifactId() + ":" + artifact.getVersion());
+//        }
+//        Set<Artifact> artifacts = resolutionResult.getArtifacts();
+//        if (!artifacts.isEmpty()) {
+//            File artifactFile = artifacts.toArray(new Artifact[0])[0].getFile();
+//            return artifactFile;
+//        } else {
+//            throw new MojoExecutionException("Unable to resolve artifact: " + artifact.getGroupId() + ":"
+//                    + artifact.getArtifactId() + ":" + artifact.getVersion() + ". Empty list of artifact files.");
+//        }
+//    }
+
+//    private String resolveVersionRange(String groupId, String artifactId, String extension, String version) throws MojoExecutionException {
+//        try {
+//            List<Restriction> restrictions = VersionRange.createFromVersionSpec(version).getRestrictions();
+//            if (!restrictions.isEmpty()) {
+//                return restrictions.get(0).getUpperBound().toString();
+//            } else {
+//                throw new MojoExecutionException("Could not get the highest version from the range: " + version);
+//            }
+//        } catch (InvalidVersionSpecificationException e) {
+//            throw new MojoExecutionException("Unable to resolve version range from " + groupId + ":" + artifactId + ":" + extension + ":" + version + ".", e);
+//        }
+//    }
 }
