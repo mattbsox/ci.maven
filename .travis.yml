@@ -2,25 +2,36 @@ sudo: required
 dist: trusty
 language: java
 jdk:
-    - openjdk7
-    - oraclejdk8
-    - oraclejdk9
+- openjdk7
+- oraclejdk8
+- oraclejdk9
 env:
-    - RUNTIME=ol RUNTIME_VERSION=18.0.0.4
-    - RUNTIME=ol RUNTIME_VERSION=19.0.0.1
-    - RUNTIME=wlp RUNTIME_VERSION=18.0.0.4
-    - RUNTIME=wlp RUNTIME_VERSION=19.0.0.1
+- RUNTIME=ol RUNTIME_VERSION=18.0.0.4
+- RUNTIME=ol RUNTIME_VERSION=19.0.0.1
+- RUNTIME=wlp RUNTIME_VERSION=18.0.0.4
+- RUNTIME=wlp RUNTIME_VERSION=19.0.0.1
 cache:
-    directories:
-        - $HOME/.m2
+  directories:
+  - "$HOME/.m2"
 before_install:
-    - echo "Deleting old .m2 artifacts..."
-    - rm -rf $HOME/.m2/repository/net/wasdev
-    - rm -rf $HOME/.m2/repository/io/openliberty
-    - echo 'Installing ci.common lib...'
-    - git clone https://github.com/wasdev/ci.common.git ./ci.common
-    - cd ./ci.common
-    - mvn clean install
-    - cd ..
+- echo "Deleting old .m2 artifacts..."
+- rm -rf $HOME/.m2/repository/net/wasdev
+- rm -rf $HOME/.m2/repository/io/openliberty
+- echo 'Installing ci.common lib...'
+- git clone https://github.com/wasdev/ci.common.git ./ci.common
+- cd ./ci.common
+- mvn clean install
+- cd ..
 script:
-  - travis_wait mvn verify -Ponline-its -Dinvoker.streamLogs=true -Druntime=$RUNTIME -DruntimeVersion=$RUNTIME_VERSION
+- travis_wait mvn verify -Ponline-its -Dinvoker.streamLogs=true -Druntime=$RUNTIME
+  -DruntimeVersion=$RUNTIME_VERSION
+deploy:
+  provider: s3
+  access_key_id: 7b171a839e7b4240a88ed4d28266db81
+  secret_access_key:
+    secure: mKEJMHnFXYKo437U2oDds3tdi1xk8wqV+M4ACM/zdc7jsCeoL0XfMMpxv9MsS8+ZwAB6EXGUYPvolAd/OjQl0n5WYnUF9ZHv7qqh1aq2JgBECSKnUogGtcm1V/jKVbF2tOuZvAxEyG/ayo1MmIduzLhMu4Nr3CIWwz5kM+mbNBM=
+  bucket: liberty-maven-plugin
+  region: "s3.us-south.cloud-object-storage.appdomain.cloud"
+  acl: public_read
+  on:
+    repo: WASdev/ci.maven
